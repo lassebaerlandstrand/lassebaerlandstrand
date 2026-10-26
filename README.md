@@ -1,3 +1,1 @@
-<p align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&height=120&color=gradient&text=Hello%20There&section=header"/>
-</p>
+<img alt="A Viking longship rowing through a moonlit Norwegian fjord under the northern lights" src="designs/longship-aurora/banner.svg" width="100%">
