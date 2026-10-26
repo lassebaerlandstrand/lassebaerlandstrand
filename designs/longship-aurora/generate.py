@@ -728,70 +728,78 @@ def edge_arc(base, sag, cx, half, fold, seed, tilt=0.0):
     return fn
 
 
-WATERFALLS = [(3, 1000.0)]   # (wall layer, x): from the low saddle in that wall's skyline
+WATERFALLS = [(3, 1000.0)]   # (wall layer, x): the shallow saddle in that wall's skyline
 
 
 def waterfall_svg(th, x0, prof, xs):
-    """A Kjelfossen-style fall: a narrow pour off the skyline that cascades over two
-    ledges (a small sideways step and a soft splash at each), fans out into a faint
-    streaked veil, and blooms into a spray plume that sinks into the mist at the foot.
-    The water streams down as slow, low-contrast dashes over a steady core."""
+    """Horsetail veil: a narrow pour off the skyline that very gradually frays into a
+    faint, soft-edged veil of spray as it falls (like the Seven Sisters in Geiranger),
+    and melts into the mist at the foot. The flanks are smooth and slightly uneven, the
+    brightness sits in a core that fades as the water spreads. Motion: soft brightness
+    swells sliding slowly down through the veil."""
     col, op = th['fall'], th['fall_op']
-    ytop = float(np.interp(x0, xs, prof)) + 0.5
-    ybot = YH - 1
+    ytop = float(np.interp(x0, xs, prof))
+    ybot = YH
     L = ybot - ytop
-    ys = np.linspace(ytop, ybot, 64)
+    ys = np.linspace(ytop, ybot, 90)
     s = (ys - ytop) / L
-    ph = np.random.default_rng(int(x0)).uniform(0, 2 * np.pi, 2)
-    cx = (x0 + 0.6 * (1 - np.exp(-(ys - ytop) / 6))
-          + 0.25 * np.sin(ys / 9 + ph[0]) + 0.12 * np.sin(ys / 23 + ph[1]))
-    ledges = [(.36, 2.0), (.64, -1.4)]          # (fraction of the drop, sideways step)
-    w0, w1 = .8, 5.0                            # veil width at the lip / at the foot
-    for a, j in ledges:
-        cx = cx + j * 0.5 * (1 + np.tanh((s - a) / .012))
-    # each tier fans out from its ledge, the lower ones wider
-    wid = np.full_like(ys, w0)
-    bounds = [0.0] + [a for a, _ in ledges] + [1.0]
-    for a, b in zip(bounds, bounds[1:]):
-        m = (s >= a) & (s <= b)
-        wa, wb = w0 + (w1 - w0) * a * .55, w0 + (w1 - w0) * b
-        wid[m] = wa + (wb - wa) * ((s[m] - a) / (b - a)) ** 1.1
-    plume = wid + 1.2 + 8.0 * np.clip((s - .62) / .38, 0, 1) ** 2
+    rng = np.random.default_rng(int(x0))
+    ph = rng.uniform(0, 2 * np.pi, 4)
+    cx = (x0 + 1.1 * (np.sin(3.2 * s + ph[0]) - np.sin(ph[0]))
+          + .25 * (np.sin(10 * s + ph[1]) - np.sin(ph[1])))
+    # half-widths of the veil: a thread at the lip, spreading slowly (faster low down),
+    # each flank with its own gentle unevenness
+    spread = th['fall_spread'] * s ** 1.7
+    hl = .6 + spread * (1 + .12 * np.sin(7 * s + ph[2]))
+    hr = .6 + spread * (1 + .12 * np.sin(6 * s + ph[3]))
 
-    def ribbon(w):
-        return poly(list(zip(cx - w / 2, ys)) + list(zip((cx + w / 2)[::-1], ys[::-1])))
+    def ribbon(kl, kr, add=0.0):
+        lx, rx = cx - hl * kl - add, cx + hr * kr + add
+        top = [(lx[0], float(np.interp(lx[0], xs, prof))), (rx[0], float(np.interp(rx[0], xs, prof)))]
+        return poly([top[0]] + list(zip(lx[1:], ys[1:])) + list(zip(rx[:0:-1], ys[:0:-1])) + [top[1]])
 
-    def grad(gid, y0, y1, stops):
-        return (f'<linearGradient id="{gid}" x1="0" y1="{f(y0)}" x2="0" y2="{f(y1)}" gradientUnits="userSpaceOnUse">'
-                + ''.join(f'<stop offset="{o}" stop-color="{col}" stop-opacity="{op * k:.3f}"/>' for o, k in stops)
+    def grad(gid, stops, c=col, k=op):
+        return (f'<linearGradient id="{gid}" x1="0" y1="{f(ytop)}" x2="0" y2="{f(ybot)}" gradientUnits="userSpaceOnUse">'
+                + ''.join(f'<stop offset="{o}" stop-color="{c}" stop-opacity="{k * v:.3f}"/>' for o, v in stops)
                 + '</linearGradient>')
 
-    u = f'fall{int(x0)}{col[1:]}'
+    u = f'fall{int(x0)}'
+    so = np.linspace(0, 1, 21)
+    tex = 1 + .22 * np.random.default_rng(int(x0) + 1).uniform(-1, 1, so.size)
+    tex[:2] = 1
+
+    def tx(pts):
+        return [(f'{o:.3f}', v * t) for o, v, t in
+                zip(so, np.interp(so, [p for p, _ in pts], [v for _, v in pts]), tex)]
+    # the core thread fades as the water spreads; the veil picks up and then thins out
+    core = tx([(0, .8), (.03, 1), (.2, .8), (.5, .5), (.75, .28), (.9, .1), (1, 0)])
+    veil = [(0, 0), (.1, .1), (.45, .2), (.75, .22), (.9, .14), (1, 0)]
+    per, speed = 40.0, 11.0
+    bands = ''.join(f'<rect x="{f(x0 - 20)}" y="{f(ytop - per + k * per)}" width="40" height="{f(per)}"/>'
+                    for k in range(int(L / per) + 2))
     out = ['<defs>',
-           grad(f'{u}v', ytop, ybot, [(0, .6), (.1, .35), (.5, .3), (.8, .24), (1, 0)]),
-           grad(f'{u}c', ytop, ybot, [(0, 1), (.08, .85), (.5, .6), (.8, .38), (.97, 0)]),
-           grad(f'{u}p', ytop + .62 * L, ybot, [(0, 0), (.6, .16), (.85, .18), (1, 0)]),
-           f'<radialGradient id="{u}s"><stop offset="0" stop-color="{col}" stop-opacity="{op * .3:.3f}"/>'
-           f'<stop offset="1" stop-color="{col}" stop-opacity="0"/></radialGradient></defs>',
-           '<g fill="none">',
-           f'<path d="{ribbon(plume)}" fill="url(#{u}p)">'
-           f'<animate attributeName="opacity" values="1;.65;1" dur="8s" repeatCount="indefinite"/></path>',
-           f'<path d="{ribbon(wid)}" fill="url(#{u}v)"/>']
-    for a, _ in ledges:
-        yy = ytop + a * L + 1.5
-        out.append(f'<ellipse cx="{f(float(np.interp(yy, ys, cx)))}" cy="{f(yy)}" '
-                   f'rx="{f(float(np.interp(yy, ys, wid)) + 1.6)}" ry="1.6" fill="url(#{u}s)"/>')
-    out.append(f'<path d="{poly(list(zip(cx, ys)), False)}" stroke="url(#{u}c)" stroke-width=".7" opacity=".45"/>')
-    # streaks: one down the middle, two fainter ones spreading with the veil
-    for off, dash, speed, w, o in [(0, '12 2 6 3 18 3 8 4', 9.0, .8, .6),
-                                   (-.34, '6 6 10 3 14 5', 10.5, .55, .36),
-                                   (.32, '8 4 5 8 13 4', 8.2, .55, .36)]:
-        per = sum(float(v) for v in dash.split())
-        out.append(f'<path d="{poly(list(zip(cx + off * wid, ys)), False)}" stroke="url(#{u}c)" stroke-width="{w}" '
-                   f'stroke-dasharray="{dash}" opacity="{o}">'
-                   f'<animate attributeName="stroke-dashoffset" values="0;{-per:g}" dur="{per / speed:.2f}s" '
-                   f'repeatCount="indefinite"/></path>')
-    out.append('</g>')
+           grad(f'{u}c', core),
+           grad(f'{u}v', veil),
+           grad(f'{u}m', [(0, .8), (.1, .7), (.5, .6), (.8, .5), (.95, .1), (1, 0)], '#fff', 1),
+           f'<linearGradient id="{u}w" x1="0" y1="0" x2="0" y2="1">'
+           f'<stop offset="0" stop-color="{col}" stop-opacity="0"/>'
+           f'<stop offset=".5" stop-color="{col}" stop-opacity="{op * .4:.3f}"/>'
+           f'<stop offset="1" stop-color="{col}" stop-opacity="0"/></linearGradient>',
+           f'<radialGradient id="{u}s"><stop offset="0" stop-color="{col}" stop-opacity="{op * .26:.3f}"/>'
+           f'<stop offset=".6" stop-color="{col}" stop-opacity="{op * .08:.3f}"/>'
+           f'<stop offset="1" stop-color="{col}" stop-opacity="0"/></radialGradient>',
+           f'<mask id="{u}k" maskUnits="userSpaceOnUse" x="{f(x0 - 20)}" y="{f(ytop - 1)}" width="40" height="{f(L + 2)}">'
+           f'<path d="{ribbon(.75, .75, .4)}" fill="url(#{u}m)"/></mask>',
+           '</defs>',
+           f'<ellipse cx="{f(cx[-1])}" cy="{f(ybot - 4)}" rx="{f(hl[-1] + hr[-1] + 6)}" ry="5" fill="url(#{u}s)">'
+           f'<animate attributeName="opacity" values="1;.6;1" dur="9s" repeatCount="indefinite"/></ellipse>',
+           # soft flanks: the veil drawn twice, wide and faint over narrower and denser
+           f'<path d="{ribbon(1, 1, .8)}" fill="url(#{u}v)" opacity=".55"/>',
+           f'<path d="{ribbon(.6, .6, .3)}" fill="url(#{u}v)"/>',
+           f'<path d="{ribbon(.15, .15, .51)}" fill="url(#{u}c)"/>',
+           f'<g mask="url(#{u}k)"><g fill="url(#{u}w)">{bands}'
+           f'<animateTransform attributeName="transform" type="translate" values="0 0;0 {f(per)}" '
+           f'dur="{per / speed:.2f}s" repeatCount="indefinite"/></g></g>']
     return ''.join(out)
 
 
@@ -937,21 +945,33 @@ def ray_shapes(rays, th, uid, used):
     return ''.join(out)
 
 
+def band_opacity(ph, k, ns, n=48):
+    """Opacity keyframes for ray set k of ns in one band of the curtain: the sets
+    take turns (raised-cosine weights 360/ns degrees apart, whose sum is constant),
+    under a slow, irregular swell of the whole band."""
+    t = np.arange(n + 1) / n
+    swell = 0.72 + 0.2 * np.sin(2 * np.pi * t + ph[0]) + 0.08 * np.sin(4 * np.pi * t + ph[1])
+    turn = (0.5 + 0.5 * np.cos(2 * np.pi * (2 * t - k / ns) + ph[2])) ** 2
+    norm = ns * 3 / 8                                   # constant sum of the ns weights
+    return ';'.join(f'{v:.3f}' for v in np.clip(swell * turn / norm * 1.25, 0, 1))
+
+
 def aurora_svg(th, uid):
-    """Returns (sky, reflection) markup. Images are drawn directly (no <use>, no
-    group opacity), so every fade is a plain alpha on one bitmap draw."""
+    """Returns (sky, reflection) markup. The aurora stays in place: it lives through
+    brightness alone. The glow breathes; along the curtain, bands swell and fade on
+    their own slow cycles while each band cross-fades between ray sets, so rays come
+    and go where they stand. Only a slow vertical stretch moves anything."""
     A = Curtain(th['a_seed'], 0, W, 0, YH, edge_arc(**th['a_edge']), th['a_h'], th['a_cols'], th['a_colh'],
                 gain=th['a_gain'], core=th['a_core'], halo=th['a_halo'], diffuse=th['a_diff'],
                 haze=th['a_haze'], env=lambda x: 0.15 + 0.85 * np.exp(-((x - 640) / th['a_env']) ** 4))
-    NR = 2
+    NS, NB = 3, 7                      # ray sets, bands along the curtain
     base = th['a_edge']['base']
 
     def frame(inner):
-        # sways, and stretches upward and back anchored on its lower edge
-        return (f'<g>{ease("transform", "-7 0;9 1;-7 0", 53, "translate")}'
-                f'<g transform="translate(0 {f(base)})"><g>'
+        # stretches upward and back, anchored on its lower edge
+        return (f'<g transform="translate(0 {f(base)})"><g>'
                 f'{ease("transform", "1 1;1 1.07;1 1", 31, "scale", begin=-6)}'
-                f'<g transform="translate(0 {f(-base)})">{inner}</g></g></g></g>')
+                f'<g transform="translate(0 {f(-base)})">{inner}</g></g></g>')
 
     def img(arr_box, anim, op=None):
         arr, (x, y, w, h) = arr_box
@@ -959,25 +979,27 @@ def aurora_svg(th, uid):
         return (f'<image x="{f(x)}" y="{f(y)}" width="{f(w)}" height="{f(h)}"{o} '
                 f'preserveAspectRatio="none" href="{data_uri(arr)}">{anim}</image>')
 
-    # sky: the sheet breathes; two ray sets drift along the curtain while
-    # cross-fading 180 degrees apart, so the total ray light stays even and no ray pops.
-    # Rays are vector shapes: they drift ~1 px/s, and some browsers snap a slowly moving
-    # bitmap to whole pixels (visible stepping), while vector edges always move smoothly.
     inner = img(A.glow(), ease('opacity', pulse_vals(.8, 1), PULSE))
-    RD = 17.0
     grads, used = ray_gradients(th, uid), set()
-    for k in range(NR):
-        b = -k * RD / NR
-        rays = A.ray_list(100 + k, th['a_nrays'], th['a_rays'])
-        inner += (f'<g opacity="0">{ease("opacity", "0;1;0", RD, begin=b)}'
-                  f'<animateTransform attributeName="transform" type="translate" values="-9 0;9 0" '
-                  f'dur="{RD}s" begin="{b:.2f}s" repeatCount="indefinite" additive="sum"/>'
-                  f'{ray_shapes(rays, th, uid, used)}</g>')
+    sets = [A.ray_list(100 + k, th['a_nrays'], th['a_rays']) for k in range(NS)]
+    rng = np.random.default_rng(th['a_seed'] + 7)
+    for b in range(NB):
+        x0, x1 = W * b / NB, W * (b + 1) / NB
+        dur = rng.uniform(20, 32)
+        ph = rng.uniform(0, 2 * np.pi, 3)          # shared by the band's ray sets
+        for k in range(NS):
+            rays = [r for r in sets[k] if x0 <= r[0] < x1]
+            if not rays:
+                continue
+            vals = band_opacity(ph, k, NS)
+            inner += (f'<g opacity="{vals.split(";")[0]}">'
+                      f'<animate attributeName="opacity" values="{vals}" dur="{dur:.1f}s" repeatCount="indefinite"/>'
+                      f'{ray_shapes(rays, th, uid, used)}</g>')
     inner = ''.join(g for i, g in enumerate(grads) if i in used) + inner
     sky = frame(inner)
-    # water: same motion, one softened raster (glow + both ray sets, smeared)
+    # water: one softened raster (glow + the ray sets, smeared), breathing with the sky
     r = th['aur_refl']
-    refl = frame(img(A.reflection([100 + k for k in range(NR)], th['a_nrays'], th['a_rays'],
+    refl = frame(img(A.reflection([100 + k for k in range(NS)], th['a_nrays'], th['a_rays'],
                                   ytop=th['refl_top']),
                      ease('opacity', pulse_vals(.8 * r, r), PULSE), op=r))
     return sky, refl
@@ -1138,7 +1160,7 @@ THEMES = {
     'dark': dict(
         bg='#0d1117', border='#30363d',
         sky=[(0, '#05080d'), (.55, '#0a111a'), (1, '#121d26')],
-        stars=True, star='#c9d6df', fall='#a8cdc4', fall_op=.47,
+        stars=True, star='#c9d6df', fall='#b4d3cb', fall_op=.38, fall_spread=4.5,
         # aurora
         a_edge=dict(base=150, sag=-45, cx=640, half=620, fold=9, seed=12, tilt=34),
         a_h=68, a_colh=105, a_gain=1.0, a_core=.3, a_halo=.10, a_diff=.7, a_rays=.5, a_nrays=150,
