@@ -670,6 +670,25 @@ class Curtain:
             acc[:, m] += ai * col[m][None, :] * prof
         return acc * strength * bright[None, :] * self.gain * self._top_fade(y), d
 
+    def ray_list(self, rseed, n, strength):
+        """The same rays as _rays_i (identical random draws), as parameters for
+        drawing them as vector shapes: (x, half-width, foot y, length, peak alpha)."""
+        x = np.arange(self.box[0], self.box[0] + self.box[2]) + 0.5
+        yb, L, bright = self._common(x)
+        r = np.random.default_rng(rseed)
+        clus = smoothstep(-0.1, 0.9, sines(x, r, 3, 16, 1400, 0.8)) ** 1.5
+        xs = r.uniform(self.box[0], self.box[0] + self.box[2], n * 3)
+        keep = r.uniform(0, 1, n * 3) < np.interp(xs, x, 0.06 + 0.94 * clus)
+        out = []
+        for xi in xs[keep][:n]:
+            wi = r.uniform(0.6, 2.6) * (1 if r.uniform() < 0.8 else 1.8)
+            ai = r.uniform(0.25, 1.0) ** 1.5
+            li = float(np.interp(xi, x, L)) * r.uniform(0.5, 1.5)
+            lo = r.uniform(-4, 6)
+            peak = ai * strength * float(np.interp(xi, x, bright)) * self.gain
+            out.append((float(xi), wi, float(np.interp(xi, x, yb)) - lo, li, lo, peak))
+        return out
+
     def glow(self, sx=0.3, sy=0.5):
         x, y = self._grid(self.box, sx, sy)
         inten, d = self._glow_i(x, y)
@@ -872,6 +891,52 @@ def image(id_, arr_box):
             f'preserveAspectRatio="none" href="{data_uri(arr)}"/>')
 
 
+RAY_LEN_BINS = np.geomspace(30, 160, 9)   # rays share the gradient of the nearest length
+RAY_SPAN = 3.5                             # rays end this many lengths above the foot (3% left)
+
+
+def ray_profile(dd, li):
+    """Brightness of a ray at height dd above its foot (as in Curtain._rays_i)."""
+    return smoothstep(-5, 7, dd) * np.exp(-np.maximum(dd, 0) / li)
+
+
+def ray_gradients(th, uid):
+    """One vertical gradient per length bin, in bounding-box units: the rect runs from
+    5 px below the foot (dark) to RAY_SPAN lengths above it; colour follows height above
+    the curtain's edge, alpha the ray profile."""
+    out = []
+    for i, li in enumerate(RAY_LEN_BINS):
+        top, bot = RAY_SPAN * li, -5.0
+        stops = []
+        for u in np.linspace(0, 1, 9):
+            dd = bot + (top - bot) * (1 - u) ** 2.2      # stops packed near the foot
+            col = cramp(th['a_cols'], np.clip(np.array([dd + 1.0]) / th['a_colh'], 0, 1))[0]
+            hexc = '#%02x%02x%02x' % tuple(int(round(c * 255)) for c in col)
+            stops.append((1 - (dd - bot) / (top - bot), hexc, float(ray_profile(np.array(dd), li))))
+        stops.sort()
+        out.append(f'<defs><linearGradient id="ray{uid}{i}" x1="0" y1="0" x2="0" y2="1">'
+                   + ''.join(f'<stop offset="{o:.3f}" stop-color="{c}" stop-opacity="{a:.3f}"/>'
+                             for o, c, a in stops)
+                   + '</linearGradient></defs>')
+    return out
+
+
+def ray_shapes(rays, th, uid, used):
+    """Each ray as one rect as wide as its gaussian cross-section carries light
+    (~1.6 sigma), filled with the gradient of its length bin."""
+    out = []
+    for xi, wi, yf, li, lo, peak in rays:
+        if peak < 0.02:
+            continue
+        i = int(np.argmin(np.abs(np.log(RAY_LEN_BINS / li))))
+        used.add(i)
+        y0, h = yf - RAY_SPAN * li, RAY_SPAN * li + 5.0
+        w = 1.6 * wi
+        out.append(f'<rect x="{f(xi - w / 2)}" y="{f(y0)}" width="{f(w)}" height="{f(h)}" '
+                   f'fill="url(#ray{uid}{i})" fill-opacity="{min(1, peak):.3f}"/>')
+    return ''.join(out)
+
+
 def aurora_svg(th, uid):
     """Returns (sky, reflection) markup. Images are drawn directly (no <use>, no
     group opacity), so every fade is a plain alpha on one bitmap draw."""
@@ -895,16 +960,20 @@ def aurora_svg(th, uid):
                 f'preserveAspectRatio="none" href="{data_uri(arr)}">{anim}</image>')
 
     # sky: the sheet breathes; two ray sets drift along the curtain while
-    # cross-fading 180 degrees apart, so the total ray light stays even and no ray pops
+    # cross-fading 180 degrees apart, so the total ray light stays even and no ray pops.
+    # Rays are vector shapes: they drift ~1 px/s, and some browsers snap a slowly moving
+    # bitmap to whole pixels (visible stepping), while vector edges always move smoothly.
     inner = img(A.glow(), ease('opacity', pulse_vals(.8, 1), PULSE))
     RD = 17.0
+    grads, used = ray_gradients(th, uid), set()
     for k in range(NR):
         b = -k * RD / NR
-        inner += img(A.rays(100 + k, n=th['a_nrays'], strength=th['a_rays'],
-                            ytop=th['ray_top'], ybot=th['ray_bot']),
-                     ease('opacity', '0;1;0', RD, begin=b)
-                     + f'<animateTransform attributeName="transform" type="translate" values="-9 0;9 0" '
-                       f'dur="{RD}s" begin="{b:.2f}s" repeatCount="indefinite"/>', op=0)
+        rays = A.ray_list(100 + k, th['a_nrays'], th['a_rays'])
+        inner += (f'<g opacity="0">{ease("opacity", "0;1;0", RD, begin=b)}'
+                  f'<animateTransform attributeName="transform" type="translate" values="-9 0;9 0" '
+                  f'dur="{RD}s" begin="{b:.2f}s" repeatCount="indefinite" additive="sum"/>'
+                  f'{ray_shapes(rays, th, uid, used)}</g>')
+    inner = ''.join(g for i, g in enumerate(grads) if i in used) + inner
     sky = frame(inner)
     # water: same motion, one softened raster (glow + both ray sets, smeared)
     r = th['aur_refl']
